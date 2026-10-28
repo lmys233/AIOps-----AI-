@@ -1,0 +1,69 @@
+# ============================================================
+#  Grafana 数据源 · 自动装载（免手工点击）
+#  ★ 关键：三个数据源之间配置互跳（exemplar / traceID / derivedFields）
+#    这是"从一个异常指标 → 点到具体 trace → 再跳到该 trace 的日志"
+#    这条排查动线的技术基础，也是 Trace Agent 与 Log Agent 协同的雏形。
+# ============================================================
+
+apiVersion: 1
+
+datasources:
+
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    uid: prometheus
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 10s
+      httpMethod: POST
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    uid: loki
+    editable: false
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        - name: TraceID
+          matcherRegex: '"trace_id":"(\w+)"'
+          url: '$${__value.raw}'
+          datasourceUid: tempo
+
+  - name: Tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    uid: tempo
+    editable: false
+    jsonData:
+      httpMethod: GET
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: '-1m'
+        spanEndTimeShift: '1m'
+        filterByTraceID: true
+        filterBySpanID: false
+        tags:
+          - key: service.name
+            value: service
+      tracesToMetrics:
+        datasourceUid: prometheus
+        spanStartTimeShift: '-1m'
+        spanEndTimeShift: '1m'
+        tags:
+          - key: service.name
+            value: service
+      serviceMap:
+        datasourceUid: prometheus
+      nodeGraph:
+        enabled: true
+      lokiSearch:
+        datasourceUid: loki

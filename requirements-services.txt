@@ -1,0 +1,41 @@
+# ============================================================
+#  被观测系统（4 个微服务）依赖 —— task.md T7 起使用
+#
+#  ★ 与 requirements.txt 分开的原因：
+#    T1~T5 只做工程基础，不需要 Web 框架；
+#    分开后 T1~T5 的验收环境可以更小、更快。
+#
+#  ★ 全部 == 精确锁定（spec §4 P9）
+# ============================================================
+
+# ---- Web 框架（spec §8.8：对外 HTTP 接口）----
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# ---- HTTP 客户端（服务间调用，spec §8.8 参数走 query string）----
+httpx==0.27.0
+
+# ---- 数据库 ----
+asyncpg==0.30.0
+
+# ---- 缓存（spec §3.3 工作记忆）----
+redis==5.2.1
+
+# ---- 结构化日志（spec §8.4 第 5 条：单行 JSON + trace_id）----
+structlog==24.4.0
+
+# ---- Prometheus 指标（spec §8.5 的 11 个指标）----
+prometheus-client==0.21.1
+
+# ---- OpenTelemetry（spec §8.4 第 4 条：OTLP 导出到 Collector）----
+#  ★ 注意：不要写 opentelemetry-bootstrap ——
+#    它不是 PyPI 上的独立包（spec §4 P6 记录的真实坑），
+#    而是 opentelemetry-distro 安装后提供的**命令**。
+opentelemetry-distro[otlp]==0.50b0
+opentelemetry-exporter-otlp-proto-grpc==1.29.0
+opentelemetry-instrumentation-fastapi==0.50b0
+opentelemetry-instrumentation-httpx==0.50b0
+opentelemetry-instrumentation-asyncpg==0.50b0
+opentelemetry-instrumentation-redis==0.50b0
+opentelemetry-instrumentation-logging==0.50b0
+opentelemetry-semantic-conventions==0.50b0

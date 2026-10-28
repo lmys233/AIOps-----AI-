@@ -1,0 +1,41 @@
+observed-name: ${AIOPS_OBSERVED_NAME:springboot-example}
+server:
+  address: 127.0.0.1
+  port: ${JAVA_OBSERVED_PORT:8085}
+spring:
+  application:
+    name: ${JAVA_OBSERVED_SERVICE:java-catalog}
+  datasource:
+    url: ${JAVA_OBSERVED_JDBC_URL:jdbc:h2:mem:java_catalog;DB_CLOSE_DELAY=-1}
+    username: ${JAVA_OBSERVED_DB_USER:sa}
+    password: ${JAVA_OBSERVED_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 4
+      connection-timeout: 1000
+  sql:
+    init:
+      mode: always
+demo:
+  drills-enabled: ${JAVA_OBSERVED_DRILLS:false}
+aiops:
+  sdk:
+    service-name: ${AIOPS_SDK_SERVICE_NAME:${spring.application.name}}
+    instance: ${AIOPS_SDK_INSTANCE:java-catalog-local}
+    env: ${AIOPS_ENV:dev}
+    cluster: ${AIOPS_CLUSTER:}
+    port: ${JAVA_SDK_PORT:8185}
+    bind-address: ${AIOPS_SDK_HOST:127.0.0.1}
+    advertise-url: ${AIOPS_SDK_ADVERTISE_URL:http://127.0.0.1:${JAVA_SDK_PORT:8185}}
+    business-url: ${AIOPS_BUSINESS_ADVERTISE_URL:http://127.0.0.1:${JAVA_OBSERVED_PORT:8085}}
+    registration-url: ${AIOPS_SDK_REGISTRATION_URL:http://127.0.0.1:8020/v1/observed/register}
+    state-dir: ${JAVA_SDK_STATE_DIR:.run/java-sdk}
+    routes:
+      "[GET /catalog/items]":
+        effect: read_only
+        probe: true
+      "[GET /catalog/items/{id}]":
+        effect: read_only
+        probe: true
+      "[POST /catalog/items]":
+        effect: write
+        probe: true

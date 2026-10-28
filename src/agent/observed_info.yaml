@@ -1,0 +1,58 @@
+version: 1
+probed_at: '2026-10-09T04:08:41+08:00'
+seed_source: /services@http://127.0.0.1:8080（应答者 gateway，ok）; /services@http://127.0.0.1:8084（应答者
+  diagnostic-lab，ok）
+services:
+- name: gateway
+  url: http://127.0.0.1:8080
+  alive: true
+  self_reported_name: gateway
+  discovered_via: self
+  note: 自身：本请求正在被处理，即存活证明（不 HTTP 自探）
+  cluster: null
+  env: prod
+  namespace: null
+  depends_on:
+  - order
+- name: inventory
+  url: http://127.0.0.1:8083
+  alive: true
+  self_reported_name: inventory
+  discovered_via: services
+  health_ms: 1145.0
+  cluster: null
+  env: prod
+  namespace: null
+  depends_on: []
+- name: order
+  url: http://127.0.0.1:8081
+  alive: true
+  self_reported_name: order
+  discovered_via: services
+  health_ms: 3636.5
+  cluster: null
+  env: prod
+  namespace: null
+  depends_on:
+  - inventory
+  - payment
+- name: payment
+  url: http://127.0.0.1:8082
+  alive: true
+  self_reported_name: payment
+  discovered_via: services
+  health_ms: 2293.6
+  cluster: null
+  env: prod
+  namespace: null
+  depends_on: []
+- name: diagnostic-lab
+  url: http://127.0.0.1:8084
+  alive: true
+  self_reported_name: diagnostic-lab
+  discovered_via: self
+  note: 自身：本请求正在被处理，即存活证明（不 HTTP 自探）
+  cluster: null
+  env: dev
+  namespace: null
+  depends_on: []

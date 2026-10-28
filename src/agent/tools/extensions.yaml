@@ -1,0 +1,30 @@
+# ==================================================================
+#  工具扩展清单（T16b）—— **动态注册的唯一入口**
+#
+#  ★ 只有这里**显式列出**且 `enabled: true` 的模块才会被加载。
+#    刻意不做"扫描目录自动加载"：那等于"谁能写文件谁就能给自己加工具"（提权）。
+#
+#  ★ 加载流程（`loader.py`）：
+#      读清单 → importlib 显式导入 → 收模块里的 @define_tool 声明
+#      → **能力策略校验**（红线 / 写能力开关 / 契约工具名保护）
+#      → 注册进 ToolRegistry → 写变更留痕
+#
+#  ★ 权限上要记住：模块里的 `granted_roles` 只是**申请**；
+#    最终授权由 `policy.py` 的能力交集裁定，申请不到的会在日志里点名（revoked）。
+#
+#  ★ 写能力（CAP_WRITE）默认关闭：没开 AIOPS_ALLOW_WRITE_TOOLS 时，
+#    任何声明写能力的扩展**注册即被拒**（fail-closed）。
+#
+#  字段：
+#    module  : Python 导入路径（必填）
+#    enabled : 是否加载（默认 false —— "没启用的代码不跑"）
+#    actor   : 谁引入的（进变更留痕，如 human:yc / system）
+#    note    : 给未来的人看的一句话
+# ==================================================================
+version: 1
+
+extensions:
+  - module: agent.tools.extensions.latency_probe
+    enabled: true
+    actor: human:yc
+    note: 示例扩展：读服务 P99 延迟（只读，只要 metrics 能力）

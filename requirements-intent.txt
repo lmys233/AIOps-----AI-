@@ -1,0 +1,3 @@
+# Optional AIOps BGE worker environment only. Observed SDK does not need these.
+sentence-transformers==6.1.0
+torch==2.8.0

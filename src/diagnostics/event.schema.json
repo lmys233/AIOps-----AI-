@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AIOps diagnostic event v1/v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "observation_id",
+    "identity",
+    "kind",
+    "source",
+    "occurred_at",
+    "captured_at",
+    "coverage",
+    "quality",
+    "correlation",
+    "payload",
+    "raw_ref"
+  ],
+  "properties": {
+    "schema_version": {
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "event_id": {
+      "type": "string"
+    },
+    "observation_id": {
+      "type": "string"
+    },
+    "identity": {
+      "type": "object",
+      "required": [
+        "tenant",
+        "env",
+        "cluster",
+        "service",
+        "instance",
+        "boot_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "tenant": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\w.:/-]+$"
+        },
+        "env": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\w.:/-]+$"
+        },
+        "cluster": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\w.:/-]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "service": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\w.:/-]+$"
+        },
+        "instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\w.:/-]+$"
+        },
+        "boot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\w.:/-]+$"
+        },
+        "observed_id": {
+          "type": "string",
+          "pattern": "^obs_[a-f0-9]{32}$"
+        }
+      }
+    },
+    "kind": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "start",
+        "end",
+        "complete"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason",
+        "sampled",
+        "truncated",
+        "dropped"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "available",
+            "unconfigured",
+            "unsupported",
+            "permission_denied",
+            "query_failed",
+            "empty",
+            "partial"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "sampled": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "dropped": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "correlation": {
+      "type": "object",
+      "maxProperties": 12,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[\\w.:/-]+$"
+      }
+    },
+    "payload": {
+      "type": "object",
+      "maxProperties": 64
+    },
+    "raw_ref": {
+      "type": "string"
+    }
+  },
+  "description": "Receiver also enforces byte limits, aware timestamps and quality/coverage consistency.",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "identity": {
+            "required": [
+              "observed_id"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "identity": {
+            "not": {
+              "required": [
+                "observed_id"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

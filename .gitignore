@@ -1,0 +1,113 @@
+# ============================================================
+#  .gitignore · AIOps 项目
+# ============================================================
+
+# Python
+.venv-langfuse-eval/
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+.venv-*/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# 环境变量（含密钥，绝不入库）
+.env
+.env.local
+.env.*
+*.env
+!.env.example
+!**/.env.example
+
+# 密钥、证书和本地数据库
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.sqlite
+*.sqlite3
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.cursor/
+.claude/
+.codex/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 日志与临时产物
+*.log
+*.jsonl
+logs/
+.dsh-tmp/
+
+# ★ 原生运行的运行期产物（阶段 1R）
+#   .run/pids.json  —— 原生服务进程表
+#   .run/logs/      —— 4 个服务的 JSONL 日志（promtail 采集 + 验收读取）
+#   两者都是运行期状态，不入库。
+.run/
+
+# ★ 调试残留（见 fix_bugs.md BUG-001）
+#   `tempfile.TemporaryDirectory()` 在本机会因 chmod 失败而遗留
+#   **ACL 被破坏、无法访问也无法删除**的目录，需管理员权限清理。
+#   这类残留不属于项目内容，必须忽略；命名约定为 .tmp-*
+.tmp-*/
+.tmp-*
+
+# 数据卷落盘（若改为 bind mount）
+data/
+*.vhdx
+
+# 评测输出（会持续增长，不入库）
+eval-results/
+reports/
+
+# 体检报告（含机器信息，本地留存即可）
+deploy/体检报告-*.txt
+deploy/config-backup-*/
+
+# 公开仓库只保留根目录 README；任务、规范、验收记录与对话历史不发布
+*.md
+!/README.md
+/docs/
+/tests/
+.spec-workflow/
+/.github/
+/wheels/
+
+# 本地开发、评测、基准与验收工具（保留部署/接入用运维工具）
+/tools/evaluation/
+/tools/*verify*.py
+/tools/*verify*.js
+/tools/*benchmark*.py
+/tools/evaluate_*.py
+/tools/*_baseline.py
+/tools/freeze_preference_baseline.py
+/tools/intent_eval.py
+/tools/intent_eval_cases.yaml
+/tools/preference_*.py
+/tools/preference_*.js
+/tools/reconcile_preference_observability.py
+/tools/report_preferences.py
+/tools/run_preference_*.py
+
+# 验收专用的注册探针，不是三个公开被观测样例之一
+/src/observed/registration_probe/
+
+# 构建与覆盖率产物
+target/
+*.class
+node_modules/
+coverage/
+.coverage

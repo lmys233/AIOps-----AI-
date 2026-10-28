@@ -1,0 +1,150 @@
+# ============================================================
+#  Promtail 配置 · 把被观测系统写出的 JSONL 日志送进 Loki
+#
+#  ★ 采集方式：**静态文件**，不是 Docker 服务发现
+#
+#    被观测系统是**宿主上的原生进程**（`.\run.ps1 business-up`，经 SDK 启动），
+#    它把单行 JSON 日志**双写**到 stdout 与
+#    `<仓库根>/.run/logs/<service>.jsonl`。
+#
+#    容器里看不到这些进程，`docker_sd_configs` 也发现不了它们 ——
+#    旧配置正是这么写的（docker_sd + 容器名当 service 标签），
+#    结果是：**挂载了日志目录却没有任何东西去读它**，
+#    Loki 里永远查不到业务日志，而"查不到"又会被读成
+#    "这段时间没有错误日志"（spec §8.3 的 P20 警告）。
+#
+#    所以这里改成读那个挂载目录：compose 把宿主 `<仓库根>/.run/logs`
+#    只读挂到容器内 `/var/log/observed`（见 docker-compose.yml 的 promtail）。
+# ============================================================
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    backoff_config:
+      min_period: 500ms
+      max_period: 5s
+      max_retries: 10
+
+scrape_configs:
+
+  # ---- 业务日志：读 SDK 写出的 JSONL ----
+  - job_name: observed-jsonl
+
+    # ★ 每个服务**单独一段**，`service` 标签**显式声明**。
+    #
+    #   ⚠️ 为什么不能写成"一个通配符 + relabel 从文件名取 service"（BUG-039 实测教训）：
+    #
+    #     relabel 阶段能拿到的标签里，`__path__` 是**通配符字符串**
+    #     `/var/log/observed/*.jsonl`（不是实际文件名）—— 于是
+    #     `regex: '.*/([^/]+)\.jsonl$'` 捕获到的就是 `*`，
+    #     4 个文件的日志被统一打上 `service="*"`。
+    #     后果不是"少一个标签"，而是 **spec §8.4 第 5 条的查询形状整体失效**：
+    #       · Log Agent 的 `{service="order"} | json | level="ERROR"` 一条都查不到
+    #         → 被读成"这段时间没有错误日志"（spec §8.3 P20 的误排除正确假设）
+    #       · 实测：`/loki/api/v1/label/service/values` 只有 `["*"]`，
+    #         而 `filename` 有 4 个正常值；`/series` 里 7 条流全是 `service="*"`
+    #     ★ 注意 relabel 阶段**也拿不到** `filename`（它是 file target 之后才按文件加的），
+    #       所以"改用 filename 当 source_label"同样不行 —— 只能显式声明。
+    #
+    #   ★ 显式声明还有一个好处：它是**部署事实**，不依赖任何解析成功。
+    #     即使某行是坏 JSON，它照样带着正确的 service 标签进 Loki
+    #     （`{service="order"}` 不会静默漏掉它）—— 这正是本文件想要的语义。
+    static_configs:
+      - targets: [localhost]
+        labels:
+          __path__: /var/log/observed/gateway.jsonl
+          service: gateway
+          cluster: ${OBSERVED_CLUSTER}
+          env: ${OBSERVED_ENV}
+      - targets: [localhost]
+        labels:
+          __path__: /var/log/observed/order.jsonl
+          service: order
+          cluster: ${OBSERVED_CLUSTER}
+          env: ${OBSERVED_ENV}
+      - targets: [localhost]
+        labels:
+          __path__: /var/log/observed/payment.jsonl
+          service: payment
+          cluster: ${OBSERVED_CLUSTER}
+          env: ${OBSERVED_ENV}
+      - targets: [localhost]
+        labels:
+          __path__: /var/log/observed/inventory.jsonl
+          service: inventory
+          cluster: ${OBSERVED_CLUSTER}
+          env: ${OBSERVED_ENV}
+
+    # ★ 这里**刻意没有 relabel_configs**：
+    #   原来那两条（`__path__ → service` / `__path__ → filename`）一条是错的
+    #   （见上），一条是死代码（filename 由 file target 自己按文件设置）。
+    #   留着"看起来在配置什么、实际派生错值"的规则，比没有规则更危险。
+
+    pipeline_stages:
+      # 业务的单行 JSON（字段契约见 spec §8.4 第 5 条 / §4 B18）：
+      # {"msg":...,"ts":...,"level":...,"service":...,"trace_id":...,"span_id":...,"error_type":...}
+      #
+      # ★ 不再从正文里提取 `service`：服务身份由上面的**标签**统一提供（唯一副本）。
+      #   正文里的 `service` 字段**原样保留**在日志行里（我们不改正文），
+      #   需要时 LogQL 用 `| json | service="order"` 照样能读 —— 两边可互相印证。
+      - json:
+          expressions:
+            level: level
+            trace_id: trace_id
+            span_id: span_id
+            msg: msg
+            error_type: error_type
+
+      # 把 JSON 里的字段提成 Loki 标签 / 元数据。
+      # ★ 注意这里**没有** `service`：它由 static_configs 显式声明（见上）。
+      - labels:
+          level:
+          error_type:
+
+      # 结构化元数据（Loki 3.x；不产生新流，查询更快）
+      # ★ 不含 service / service_name：服务身份只由 `service` 标签承担（见上）
+      - structured_metadata:
+          trace_id:
+          span_id:
+
+      # ★ 时间戳取日志自己的 `ts`（RFC3339），而不是采集时刻 ——
+      #   否则"日志时间"变成"promtail 读到的时间"，与指标拐点对不齐。
+      #   action_on_failure: skip = 解析不了就保留原时间戳，而不是丢这条日志。
+      - timestamp:
+          source: ts
+          format: RFC3339Nano
+          action_on_failure: skip
+
+      # ★★ 刻意**不**做 `output: source: msg`（去掉 JSON 外壳）：
+      #
+      #   旧配置把日志正文替换成 JSON 里的 msg，于是 Loki 里存的是
+      #   "connection pool timeout" 这样的纯文本。后果三条，全是坑：
+      #
+      #   ① Log Agent 的 LogQL 过滤失效：查询形如
+      #      `{service=~"..."} | json | level="ERROR"` —— 正文已经不是 JSON，
+      #      `| json` 解析失败，一条都匹配不到。而"查不到"会被读成
+      #      "这段时间没有 ERROR 日志"，正是 spec §8.3 P20 警告的**误排除正确假设**。
+      #   ② Grafana 的 Loki 数据源配了 derivedFields
+      #      `matcherRegex: '"trace_id":"(\w+)"'`，用来一键跳到 Tempo 链路；
+      #      正文没有 JSON 时这个跳转永远不触发。
+      #   ③ 结构化字段（error_type / trace_id / span_id）全部丢失，
+      #      只剩一个字符串，能做聚类但不能做统计。
+      #
+      #   保留完整 JSON 正文的代价只是每条日志长一点（Loki **不索引正文**，
+      #   存储开销可忽略），换来的是"结构化查询 + 链路互跳"都能工作。
+
+      # ★ 错误模式归一化：把变量部分替换成占位符，
+      #   让"timeout after 3.001s"与"...3.872s"归成同一个模式，便于聚类。
+      - replace:
+          expression: '(timeout after )\d+(\.\d+)?(s|ms)'
+          replace: '${1}<DURATION>'
+      - replace:
+          expression: '(trace_id|span_id)[=:]\s*[0-9a-f]{8,}'
+          replace: '${1}=<ID>'

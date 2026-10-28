@@ -1,0 +1,181 @@
+# ============================================================
+#  OpenTelemetry Collector 配置 · P0
+#  角色：统一遥测入口，解耦"应用"与"后端存储"
+#    - traces  → Tempo
+#    - metrics → 暴露给 Prometheus 抓取（:8889）
+#    - 自身健康指标 → :8888
+#  为什么要有 Collector 而不是应用直连 Tempo：
+#    ① 后端可随时替换（Tempo→Jaeger）而不用改应用代码
+#    ② 可在此做统一采样、属性富化、脱敏（★ 审计与隐私要求）
+# ============================================================
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins: ["*"]
+
+  # 供应用以 Prometheus 格式推送时使用（本 P0 未启用，保留扩展点）
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: otel-self
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["localhost:8888"]
+
+processors:
+  # 内存保护：超限即丢弃新数据，绝不让 Collector 拖垮整机
+  memory_limiter:
+    check_interval: 2s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # 批量发送，降低网络开销
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+  # ★ 采样：P0 阶段全采样（故障排查需要完整链路）
+  #   上线前必须改为 probabilistic 或 tail_sampling，否则量一大会炸
+  # probabilistic_sampler:
+  #   sampling_percentage: 20
+
+  # ============================================================
+  #  ★★ 尾采样（tail_sampling）：**错误 trace 一定保留**
+  #
+  #  为什么必须是"尾"而不是"头"：
+  #    头采样（probabilistic_sampler）在建 trace 的那一刻就掷骰子 ——
+  #    掷完才可能出错。于是**错误请求的链路会被按概率丢掉**，而"错误请求的
+  #    trace 取得到"正是错误下钻（错误 → trace_id → 断点 span）的前提。
+  #    尾采样先等整条 trace 收齐，再按**结果**决定留不留。
+  #
+  #  三条策略（顺序即优先级，`policy_order` 里写死）：
+  #    ① `keep-errors`  —— trace 里只要有一个 span 报错就**强制保留**，
+  #       不看概率（这是本项目唯一不可让步的一条）；
+  #    ② `keep-slow`    —— 慢请求也留（超时/卡顿未必打错误码）；
+  #    ③ `sample-rest`  —— 其余按 20% 抽（这一步才是"省量"的地方）。
+  #
+  #  ★ `status_code: [ERROR]` 的取值是 `config.TraceStatus` 的枚举名
+  #    （`STATUS_CODE_ERROR`），写成字符串会被 collector **拒绝启动**。
+  #  ★ `sampling_percentage` 只在最后一条策略上给：前两条是"必须留"，
+  #    给了百分比就会变成"按概率留错误 trace"（那就白做了）。
+  # ============================================================
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 100000
+    expected_new_traces_per_sec: 10
+    policies:
+      - name: keep-errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: keep-errors-by-attribute
+        type: boolean_attribute
+        boolean_attribute:
+          key: error
+          value: true
+      - name: keep-slow
+        type: latency
+        latency:
+          threshold_ms: 3000
+      - name: sample-rest
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 20
+
+  # ★ 属性富化：给所有 span 打上集群/环境标签，供后续实体对齐使用
+  #
+  #  ★ 取值来自 `deploy/.env`（**唯一定义处**）：Collector 原生支持
+  #    `${env:VAR}` 展开，compose 负责把它传进容器。
+  #    这样 prometheus / promtail / tempo / collector 与 SDK 自报的是**同一个值**。
+  resource:
+    attributes:
+      - key: cluster
+        value: ${env:OBSERVED_CLUSTER}
+        action: upsert
+      - key: env
+        value: ${env:OBSERVED_ENV}
+        action: upsert
+
+  # 限制 span 属性数量，防属性爆炸；★ 审核 4 · S2：**凭据类属性一律删**
+  attributes:
+    actions:
+      - key: http.request.header.authorization
+        action: delete
+      - key: db.statement.parameters
+        action: delete
+      # ★★ 审核 4 · S2：query string 里常带凭据（`?api_key=…` / `?token=…`）。
+      #   下面四个属性就是 OTel HTTP 语义约定里**承载 query 的全部属性**，
+      #   整条删掉即可（路由模板 `http.route` 保留 —— 归因需要的是它，它也不含 query）。
+      #   ★ 为什么用 delete 而不是 `transform` + `replace_pattern`：
+      #     本会话起不了 Docker，**无法实测** OTTL 正则；而一条写错的正则会让采集器
+      #     起不来（整栈挂掉）。删属性达到同样目的，且零启动风险。
+      #   ★ 残留不确定性（如实记录）：span **name** 在未匹配路由时可能是原始路径
+      #     （不含 query）；那属于"高基数"而不是"泄密"，且 SDK 侧的指标标签已用
+      #     有界值兜住（见 `middleware_http.route_template`）。
+      - key: http.target
+        action: delete
+      - key: url.full
+        action: delete
+      - key: http.url
+        action: delete
+      - key: url.query
+        action: delete
+
+exporters:
+  # traces → Tempo（OTLP gRPC）
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 5s
+      max_elapsed_time: 60s
+
+  # metrics → 以 Prometheus 格式暴露在 :8889，由 Prometheus 抓取
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+    enable_open_metrics: true
+
+  # 调试输出（排查链路是否通时打开）
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 200
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  pprof:
+    endpoint: 0.0.0.0:1777
+
+service:
+  extensions: [health_check, pprof]
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed
+      address: 0.0.0.0:8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      # ★★ 顺序固定：`memory_limiter` 最先（保命）→ 富化 → **尾采样** → `batch`。
+      #    尾采样必须在 `batch` **之前**：批一旦发出去（= 上报到后端），
+      #    这条 trace 就已经落库了，"要不要留"也就无从决定。
+      processors: [memory_limiter, resource, attributes, tail_sampling, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [prometheus]

@@ -1,0 +1,308 @@
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c2128; --line:#30363d;
+  --fg:#e6edf3; --muted:#8b949e; --accent:#2f81f7; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  --mono:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;
+}
+.evidence-reference-list{display:block;margin:4px 0}
+.evidence-reference{display:flex;gap:8px;align-items:center;color:#79b8ff;text-decoration:none;max-width:100%;padding:3px 5px;border-radius:4px;font-size:13px;font-weight:400}
+.evidence-reference span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.evidence-reference:hover{background:var(--panel2);text-decoration:underline}
+.evidence-reference:focus-visible{outline:2px solid var(--accent)}
+.evidence-drawer{position:fixed;inset:0 0 0 auto;margin:0;width:min(580px,100vw);max-width:100vw;height:100dvh;max-height:100dvh;padding:0;border:0;border-left:1px solid var(--line);background:var(--panel);color:var(--fg);box-shadow:-10px 0 40px #0005}
+.evidence-drawer[open]{display:flex;flex-direction:column}
+.evidence-drawer::backdrop{background:#0007}
+.evidence-drawer header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line);flex-shrink:0}
+.evidence-drawer button{background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:6px 10px;cursor:pointer}
+.evidence-drawer-body{padding:16px 20px;overflow-y:auto;min-height:0;overflow-wrap:anywhere}
+.evidence-drawer-body dl{display:grid;grid-template-columns:90px minmax(0,1fr);gap:8px 12px;font-size:13px}
+.evidence-drawer-body dt{color:var(--muted)}
+.evidence-drawer-body dd{margin:0}
+.evidence-drawer-body pre{white-space:pre-wrap;background:var(--bg);padding:12px;border-radius:6px;font-size:12px}
+.evidence-summary{font-weight:600}
+*{box-sizing:border-box}
+/* ★★ 外壳是**视口高度**的三件套（html/body → .app → .main），页面本身**不滚动**：
+   滚动条只出现在该滚的地方（对话时间线 / 会话列表 / 非对话面板）。
+   以前 `.app{min-height:100vh}` + `.timeline{flex:1}` 的组合让**页面**变成滚动容器：
+   对话一长，整页一起滚，侧栏的会话列表被顶出视野 —— 用户实测反馈的正是这个。 */
+html,body{height:100%}
+@media(max-width:640px){
+  .app{grid-template-columns:minmax(0,1fr)!important;grid-template-rows:auto minmax(0,1fr)}
+  .sidebar{max-height:30vh;padding:8px!important;gap:8px!important;overflow-y:auto!important}
+  .sidebar nav{flex-direction:row;flex-wrap:wrap;gap:4px}
+  .sidebar .sessions{max-height:90px;flex:none}
+  .sidebar-foot{display:grid!important;grid-template-columns:1fr 1fr;margin-top:0!important}
+  .sidebar-foot input{box-sizing:border-box}
+  .main .statusbar{flex-wrap:wrap;padding:6px 8px}
+  .statusbar #trace{max-width:100%;overflow-wrap:anywhere}
+  .main .panel{padding:8px}
+  .timeline{overflow-x:hidden}
+  .timeline .mono,.timeline .msg-head{min-width:0;overflow-wrap:anywhere;flex-wrap:wrap}
+}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  overflow:hidden}
+.app{display:grid;grid-template-columns:250px 1fr;height:100vh;overflow:hidden}
+.sidebar{background:var(--panel);border-right:1px solid var(--line);padding:16px;
+  display:flex;flex-direction:column;gap:16px;min-height:0;overflow:hidden}
+.brand{font-size:18px;font-weight:700}.brand span{color:var(--accent)}
+nav{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
+.nav-item{text-align:left;background:none;border:1px solid transparent;color:var(--fg);padding:8px 10px;border-radius:8px;cursor:pointer}
+.nav-item:hover{background:var(--panel2)}
+.nav-item.active{background:var(--panel2);border-color:var(--line);color:#fff}
+.sidebar-foot{display:flex;flex-direction:column;gap:8px;margin-top:auto;font-size:12px;color:var(--muted);flex:0 0 auto}
+.sidebar-foot input[type=text],.sidebar-foot input[type=password],.sidebar-foot input:not([type=checkbox]){width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:5px 7px}
+.sidebar-foot label{display:flex;flex-direction:column;gap:4px}
+.sidebar-foot label.row{flex-direction:row;align-items:center;gap:6px}
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.statusbar{display:flex;align-items:center;gap:10px;padding:10px 18px;border-bottom:1px solid var(--line);
+  background:var(--panel);flex:0 0 auto}
+.spacer{flex:1}
+.mono{font-family:var(--mono);font-size:12px}
+.muted{color:var(--muted)}
+.panel{display:none;padding:18px;gap:14px;flex-direction:column;min-width:0;min-height:0}
+/* 面板撑满剩余高度；**非对话面板**自己滚（表单/表格可能很长） */
+.panel.active{display:flex;flex:1;min-height:0;overflow-y:auto}
+/* ★ 对话面板反而不许整块滚：滚动交给时间线，输入框永远留在底部 */
+#panel-chat{overflow:hidden}
+h2{margin:0;font-size:16px;flex:0 0 auto}
+.badge{padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line)}
+.badge.ok{color:var(--ok);border-color:var(--ok)}
+.badge.warn{color:var(--warn);border-color:var(--warn)}
+.badge.bad{color:var(--bad);border-color:var(--bad)}
+.badge.unknown{color:var(--muted)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+.card h3{margin:0 0 8px;font-size:14px;display:flex;gap:8px;align-items:center}
+.card .kv{display:grid;grid-template-columns:150px 1fr;gap:4px 10px}
+.card .kv dt{color:var(--muted)}
+.card .kv dd{margin:0;word-break:break-word}
+/* ★★ 对话时间线：**自己的滚动条**（`min-height:0` 是让 flex 子项真能收缩的关键，
+   否则内容会把容器撑高、滚动条跑到页面上）；`overscroll-behavior` 防止滚到底后
+   把滚动"传染"给外层。 */
+.timeline{display:flex;flex-direction:column;gap:8px;overflow-y:auto;flex:1 1 auto;min-height:0;
+  overscroll-behavior:contain;padding-right:6px}
+/* ★★ T35：时间线属于**推理过程** → 小号灰字；只有结论区用正文色加粗（见下） */
+.ev{display:grid;grid-template-columns:96px 1fr;gap:10px;border-left:2px solid var(--line);
+  padding-left:10px;font-size:12.5px;color:var(--muted)}
+.ev .ev-name{font-family:var(--mono);font-size:12px;color:#6e7681}
+
+/* ★★ T35 信息层级：结论黑粗 · 推理过程灰小（对齐"深度推理"的观感） */
+.verdict{margin:2px 0 10px}
+.verdict-line{font-size:15px;font-weight:600;color:var(--fg);line-height:1.55}
+.verdict-line strong{font-weight:700;color:#fff}
+.verdict-why{margin-top:6px;font-size:12.5px;line-height:1.65;color:var(--muted)}
+.verdict-why strong{color:#c9d1d9;font-weight:600}
+/* ★ 导出入口（保存为 md 文件）—— 与结论同行，说明文字紧随其后 */
+.verdict-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+.verdict-actions button.chip{font-size:12px;padding:3px 10px;border-radius:999px}
+.verdict-actions .hint.muted{color:var(--muted)}
+.verdict-actions .hint.ok{color:var(--ok)}
+.verdict-actions .hint.warn{color:var(--warn)}
+.verdict-actions .hint.bad{color:var(--bad)}
+details.reasoning{margin-top:8px;border-top:1px dashed var(--line);padding-top:8px}
+details.reasoning>summary{cursor:pointer;font-size:12px;color:var(--muted);list-style:none;outline:none}
+details.reasoning>summary::before{content:"▸ "}
+details.reasoning[open]>summary::before{content:"▾ "}
+details.reasoning .kv{grid-template-columns:118px 1fr;gap:3px 10px;font-size:12px}
+details.reasoning .kv dt{color:#6e7681}
+details.reasoning .kv dd{color:var(--muted);margin:0}
+details.reasoning ul{margin:0;padding-left:16px}
+/* ★ T37：折叠区里的"本轮过程行"（事件时间线）—— 与卡片外的行同款式，但从属于答案卡 */
+.turn-process{display:flex;flex-direction:column;gap:6px;margin:8px 0 10px;
+  padding-left:6px;border-left:2px solid var(--line)}
+.turn-process .ev{font-size:12px}
+/* 流式期间的"进行中"提示（不进折叠区，答案卡出现即移除） */
+.ev.live{border-left-color:var(--accent);color:var(--muted)}
+.ev.live .ev-name{color:var(--accent)}
+/* ★ T42：答案的**明细块**（表格 / JSON 两种视图，同一份数据） */
+.details{margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+.details-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.details-head .chip{font-size:11px;padding:1px 8px;border-radius:999px}
+/* ★★ 明细表**不许撑破卡片**（用户实测：一行文本太长 → `<tbody>` 向右溢出到卡片外）：
+   ① 容器自己可横向滚动（最后一道兜底，不再把外层顶宽）；
+   ② `table-layout:fixed` + 百分比列宽 → 列宽由**容器**决定，而不是由最长那格决定
+      （`auto` 布局下，一个不换行的长格会把整张表撑出去）；
+   ③ 格内**允许换行 + 长 token 断行**（`POOL_QUERY_FAILED`、`inventory_stock`、
+      一长串 hypothesis 文本都属于"没有空格也断不开"的那种）。
+   修前 `td.k` 是 `white-space:nowrap`、整表 `table-layout:auto` → 长文本必然外溢。 */
+.details-body{max-width:100%;overflow-x:auto}
+table.detail{font-size:12.5px;table-layout:fixed;width:100%}
+table.detail th{text-align:left;vertical-align:top}
+table.detail td{vertical-align:top;white-space:normal;word-break:break-word;
+  overflow-wrap:anywhere}
+table.detail td.k{color:var(--muted);width:32%;min-width:96px;white-space:normal;
+  word-break:break-word;overflow-wrap:anywhere}
+pre.detail-json{background:var(--bg);border:1px solid var(--line);border-radius:8px;
+  padding:8px 10px;font-size:12px;color:#c9d1d9;overflow:auto;max-height:320px;margin:0}
+
+/* ★ T40：反问是**助手的一句话**（不是卡片内问答）—— 快捷词只填输入框 */
+.card.ask{border-left:3px solid var(--warn)}
+.card.ask .ask-text{color:var(--fg);font-size:13.5px;line-height:1.65}
+.card.ask button.chip{font-size:12px;padding:3px 9px;border-radius:999px}
+/* ★ BUG-191：证据行 —— 头一行是 id/signal（小灰），下面一行是**人读的摘要** */
+.ev-line{margin-bottom:4px}
+.ev-sum{color:#c9d1d9;font-size:12.5px}
+/* 输入区永远留在对话区底部（不随时间线滚动） */
+.composer{display:flex;flex-direction:column;gap:8px;flex:0 0 auto}
+textarea,pre.result{width:100%;background:var(--panel);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:10px;font:inherit;resize:vertical}
+textarea.mono,pre.result{font-family:var(--mono);font-size:12px}
+.composer-actions{display:flex;gap:8px;align-items:center}
+button{background:var(--panel2);border:1px solid var(--line);color:var(--fg);padding:6px 12px;border-radius:8px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.ghost{background:transparent}
+button:disabled{opacity:.5;cursor:not-allowed}
+.hint{color:var(--muted);font-size:12px}
+/* 事故页：左右两栏各自滚（`min-height:0` 让它们在 flex 面板里真的能收缩） */
+.split{display:grid;grid-template-columns:320px 1fr;gap:12px;min-height:0;flex:1 1 auto}
+.list{list-style:none;margin:0;padding:0;max-height:none;overflow-y:auto;min-height:0}
+.list li{padding:8px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;cursor:pointer;background:var(--panel)}
+.list li:hover{background:var(--panel2)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+th{background:var(--panel2);color:var(--muted);font-weight:600}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+form.inline{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+form.inline input{background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:5px 7px}
+
+/* ★ 会话管理（侧栏：「＋ 新建」+ 列表：切换 / 重命名 / 删除，当前会话高亮） */
+.sessions{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;
+  border-top:1px solid var(--line);padding-top:12px}
+.sessions-head{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted)}
+.sessions-head button.chip{font-size:11px;padding:2px 8px;border-radius:999px}
+.session-list{list-style:none;margin:0;padding:0;overflow:auto;flex:1;min-height:64px;
+  display:flex;flex-direction:column;gap:6px}
+.session-list li{border:1px solid transparent;border-radius:8px;padding:6px 8px;background:var(--panel2);cursor:pointer}
+.session-list li:hover{border-color:var(--line)}
+.session-list li.active{border-color:var(--accent);background:#1b2635}
+.session-list li.active .session-title{color:#fff}
+.session-list li.session-empty{cursor:default;background:none;border-color:transparent;
+  color:var(--muted);font-size:12px;padding-left:2px}
+.session-item{position:relative}
+/* ★ 还没有会话号时列表顶上的「新会话」占位条：不可点（点它没有意义），不要手型光标 */
+.session-item.pending{cursor:default}
+.session-item.pending .session-title{padding-right:8px}
+.session-title{font-size:12.5px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;padding-right:44px}
+.session-meta{font-size:11px;color:var(--muted);margin-top:2px}
+.session-ops{position:absolute;top:5px;right:6px;display:flex;gap:4px}
+.session-ops button{font-size:11px;padding:0 5px;line-height:18px;border-radius:6px;opacity:.55}
+.session-list li:hover .session-ops button{opacity:1}
+.session-rename{width:100%;background:var(--bg);border:1px solid var(--accent);color:var(--fg);
+  border-radius:6px;padding:3px 6px;font:inherit;font-size:12.5px}
+.sessions-note{font-size:11px;color:var(--muted);word-break:break-word}
+.sessions-note.warn{color:var(--warn)}
+.sessions-note.bad{color:var(--bad)}
+.sessions-note.ok{color:var(--ok)}
+
+/* ★★ 对话气泡：收发**同形** —— 用户在左、AI 在右。
+   发送（`appendUserBubble` / `outcomeCard`）与"刷新后恢复历史"（`renderRestoredTurns`）
+   用的是同一套类，所以同一段对话刷新前后**长得一样**（修前：发送走上下列表、恢复走左右气泡）。 */
+.msg{max-width:78%;display:flex;flex-direction:column;gap:4px}
+.msg-user{align-self:flex-start;align-items:flex-start}
+.msg-ai{align-self:flex-end;align-items:flex-end;text-align:right}
+.msg .msg-who{font-size:11px;color:var(--muted)}
+.msg .msg-text{font-size:13.5px;line-height:1.65;color:#c9d1d9;white-space:pre-wrap;
+  word-break:break-word;border:1px solid var(--line);border-radius:10px;padding:7px 10px;
+  background:var(--panel)}
+.msg-text:empty{display:none}                 /* AI 那条的正文在卡片里，空盒子不留痕 */
+.msg-user .msg-text{border-left:3px solid var(--accent)}
+.msg-ai .msg-text{border-right:3px solid var(--ok)}
+.msg .msg-at{font-size:11px;color:#6e7681}
+.msg .msg-text strong{color:#fff;font-weight:700}
+/* AI 气泡里的答案卡：贴着气泡宽度（结论常显、过程折进卡内的 `details.reasoning`） */
+.msg-ai .card{width:100%;margin:0;text-align:left}
+/* ★ 「展开明细」：恢复历史那一侧的可展开入口（与实时回答的折叠同一个交互） */
+.msg .msg-more{width:100%;text-align:left;font-size:12px;color:var(--muted);
+  border:1px dashed var(--line);border-radius:8px;padding:4px 8px}
+.msg .msg-more>summary{cursor:pointer;list-style:none;outline:none}
+.msg .msg-more>summary::before{content:"▸ "}
+.msg .msg-more[open]>summary::before{content:"▾ "}
+.msg .msg-more-body{margin-top:6px}
+.msg-ledger .msg-text{border-left:3px solid var(--warn);border-style:dashed}
+.msg-ledger .msg-who{color:var(--warn)}
+
+/* ★ 恢复回来的历史：小节标题（左右气泡本身用上面的 `.msg*`） */
+.hist-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted);
+  border-bottom:1px dashed var(--line);padding-bottom:6px}
+.ev.hist-warn{border-left-color:var(--warn)}
+.ev.hist-warn .ev-name{color:var(--warn)}
+
+/* ============================================================
+   ★★ T54：工具调用卡（"每个环节都是一次 tool call"）
+   —— 折叠行：调用徽标 + 中文短名 + 工具名 + 状态 + 耗时
+   —— 展开：参数（等宽、有界）与结果（完成后就地补上）
+   ============================================================ */
+.tools{display:flex;flex-direction:column;gap:6px;margin:2px 0 6px;max-width:78%;align-self:flex-start}
+.tool{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--line);
+  border-radius:8px;padding:5px 9px;font-size:12.5px}
+.tool>summary{cursor:pointer;list-style:none;outline:none;display:flex;align-items:center;
+  gap:8px;flex-wrap:wrap;color:var(--fg)}
+.tool>summary::before{content:"▸ ";color:var(--muted)}
+.tool[open]>summary::before{content:"▾ "}
+.tool .tool-badge{background:var(--panel);border:1px solid var(--line);border-radius:999px;
+  padding:0 7px;font-size:11px;color:var(--muted)}
+.tool .tool-title{font-weight:600}
+.tool .tool-name{color:var(--muted);font-size:11.5px}
+.tool .tool-status{font-size:11.5px;color:var(--muted);margin-left:auto}
+.tool .tool-meta{color:#6e7681;font-size:11px}
+.tool.run{border-left-color:var(--accent)}
+.tool.run .tool-status{color:var(--accent)}
+.tool.ok{border-left-color:var(--ok)}
+.tool.ok .tool-status{color:var(--ok)}
+.tool.bad{border-left-color:var(--bad)}
+.tool.bad .tool-status{color:var(--bad)}
+.tool-body{margin-top:6px;border-top:1px dashed var(--line);padding-top:6px;
+  display:flex;flex-direction:column;gap:6px}
+.tool-sec .tool-k{color:var(--muted);font-size:11px;margin-bottom:2px}
+.tool-sec .tool-why,.tool-sec .tool-result{color:#c9d1d9;line-height:1.6;word-break:break-word}
+.tool-sec pre.tool-params{margin:0;background:var(--bg);border:1px solid var(--line);border-radius:6px;
+  padding:6px 8px;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+  font-family:var(--mono);font-size:11.5px;color:#c9d1d9}
+/* Registered systems are ordinary directory cards, with bounded collapsed detail. */
+.observed-card { padding: 18px; margin: 14px 0; border: 1px solid #334155; border-radius: 10px; overflow-wrap: anywhere; }
+.observed-card details { margin: 10px 0; padding: 8px; }
+.observed-card summary { cursor: pointer; }
+#observed-select { width: 100%; }
+.access-dialog { width:min(90vw,900px); max-height:80vh; overflow:auto; background:#111820; color:#dbe9f6; border:1px solid #456; } .access-dialog pre { white-space:pre-wrap; overflow-wrap:anywhere; } .access-dialog button { display:block; margin-bottom:10px; }
+.system-home .sidebar .nav-item:not(.platform-nav),.system-home .sessions,.system-home .sidebar-foot,.system-home .workspace-system{display:none!important}
+body:not(.system-home) .platform-nav{display:none}
+.intent-card,.intent-editor{border:1px solid var(--line);border-radius:10px;padding:16px;margin:14px 0;overflow-wrap:anywhere}
+.intent-card pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.intent-card button{margin-right:8px}
+.intent-editor label{display:block;margin:10px 0}
+.intent-editor input:not([type=checkbox]),.intent-editor select,.intent-editor textarea{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);padding:8px;border-radius:6px}
+.intent-editor[hidden]{display:none}
+.system-home #panel-intents{max-width:1200px;width:100%;margin:0 auto}
+.system-home #panel-observed{max-width:1200px;width:100%;margin:0 auto}
+.observed-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.observed-heading h3{margin:0}
+.observed-heading button{flex-shrink:0}
+.workspace-system{font-size:12px;color:var(--muted);overflow-wrap:anywhere;padding:8px 0}
+.platform-auth{font-size:12px;max-width:230px}
+.platform-auth input{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line)}
+.sidebar label[hidden],.sidebar [hidden]{display:none!important}
+.knowledge-card{border:1px solid var(--line);border-radius:10px;padding:16px;margin:14px 0;overflow-wrap:anywhere}
+.knowledge-card button{margin:4px 8px 4px 0}.knowledge-filter{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.knowledge-filter input,.knowledge-filter select{max-width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);padding:8px}
+.system-home #panel-knowledge{max-width:1200px;width:100%;margin:0 auto}
+.knowledge-drawer{position:fixed;right:0;top:0;height:100vh;width:min(680px,100vw);z-index:90;background:var(--bg);border-left:1px solid var(--line);padding:20px;overflow:auto;box-sizing:border-box}
+.knowledge-drawer[hidden]{display:none}.knowledge-content{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono)}
+.knowledge-reference{color:#7dd3fc;text-decoration:underline;overflow-wrap:anywhere}
+.tool-result-json { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-height: 480px; overflow: auto; }
+/* Warning source text is rendered with textContent; long content stays bounded. */
+.alert-count { display:inline-block;min-width:1.4em;padding:1px 6px;margin-left:8px;border-radius:12px;background:#dc3545;color:white;text-align:center;font-size:12px; }
+.alert-count[hidden],.command-preview[hidden] { display:none; }
+.warning-card { border:1px solid var(--border,#d4d8df);border-radius:10px;padding:16px;margin:12px 0;overflow-wrap:anywhere; }
+.warning-card code { display:block;margin:8px 0;font-size:12px; }
+.warning-card pre { max-height:380px;overflow:auto;white-space:pre-wrap; }
+.command-preview { max-height:260px;overflow:auto;border:1px solid var(--border,#d4d8df);border-radius:8px;padding:10px;margin-bottom:8px; }
+.command-suggestion { display:block;width:100%;text-align:left;margin:6px 0;white-space:normal; }
+/* Feedback is shared by restored/live answer cards. */
+.answer-feedback{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:10px;border-top:1px solid var(--line,#ddd)}
+.answer-feedback button[aria-pressed="true"]{outline:2px solid #4896eb;background:#dcecff;color:#182e48}
+.answer-feedback textarea{display:block;width:min(440px,85vw);max-width:100%;min-height:55px;margin-top:6px}
+.answer-feedback details{max-width:100%}
+.tool-total{font-size:12px;padding:5px 9px;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.answer-copy-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:8px}
+.answer-copy{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:6px;flex-shrink:0}
+.answer-copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.answer-copy-status{font-size:12px;overflow-wrap:anywhere;min-width:0}
+.copy-buffer{position:fixed;top:0;left:-9999px;width:1px;height:1px;opacity:0}

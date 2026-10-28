@@ -1,0 +1,44 @@
+# Registered SDK metrics targets; platform target discovery is not an SDK heartbeat.
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+  external_labels:
+    cluster: ${OBSERVED_CLUSTER}
+    env: ${OBSERVED_ENV}
+rule_files:
+- /etc/prometheus/rules/*.yml
+scrape_configs:
+- job_name: prometheus
+  static_configs:
+  - targets:
+    - localhost:9090
+- job_name: otel-collector
+  static_configs:
+  - targets:
+    - otel-collector:8888
+- job_name: otel-app-metrics
+  static_configs:
+  - targets:
+    - otel-collector:8889
+- job_name: aiops-registered-systems
+  honor_labels: false
+  http_sd_configs:
+  - url: http://host.docker.internal:8020/v1/observed-targets
+    refresh_interval: 10s
+  metric_relabel_configs:
+  - source_labels:
+    - exported_observed_id
+    target_label: observed_id
+    action: keepequal
+  - source_labels:
+    - exported_tenant
+    target_label: tenant
+    action: keepequal
+  - source_labels:
+    - exported_service
+    target_label: service
+    action: keepequal
+  - source_labels:
+    - exported_env
+    target_label: env
+    action: keepequal

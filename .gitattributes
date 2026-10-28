@@ -1,0 +1,18 @@
+# ============================================================
+#  行尾与文本判定（审核 4 #5）
+# ============================================================
+#  ★ 为什么必须有：Windows 上的编辑器/脚本会把整文件改成 CRLF，
+#    于是 diff 里看不到真实改动、git blame 被抹平（一次事故里 73 个文件被翻过）。
+#  ★ 口径：仓库里一律 **LF**；`*.ps1` 保持原样（PowerShell 对 BOM/行尾更敏感）。
+* text=auto eol=lf
+*.ps1 -text
+
+# 二进制（不要当文本处理）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.xlsx binary

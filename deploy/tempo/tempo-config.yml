@@ -1,0 +1,77 @@
+# ============================================================
+#  Tempo 配置 · P0（单机本地存储）
+#  为什么选 Tempo 而不是 Jaeger：
+#    Tempo 只依赖对象存储、无自建索引库（Jaeger 需要 Cassandra/ES），
+#    内存与运维成本低得多；且与 Grafana 同厂，Trace↔Log↔Metric 互跳开箱即用。
+#    代价：Tempo 只能按 trace_id 查，不能按标签全文搜索 —— 这正是
+#    我们要让 Trace Agent 用 TraceQL 解决的（TraceQL 支持结构化过滤）。
+# ============================================================
+
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+  trace_idle_period: 10s
+  complete_block_timeout: 1h
+
+compactor:
+  compaction:
+    block_retention: 24h          # ★ 短保留，省磁盘
+
+metrics_generator:
+  registry:
+    external_labels:
+      # ★ 集群名来自 deploy/.env（唯一定义处），由 compose 传进容器 + `-config.expand-env=true` 展开
+      cluster: ${OBSERVED_CLUSTER}
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      # ★ 关键：把 span 里算出的指标（service graph / span metrics）
+      #   写回 Prometheus，这样 Metrics Agent 也能"看见"链路侧的聚合信号。
+      #   注意 Prometheus 已开启 --web.enable-remote-write-receiver
+      - url: http://prometheus:9090/api/v1/write
+        send_exemplars: true
+  traces_storage:
+    path: /var/tempo/generator/traces
+  processor:
+    local_blocks:
+      filter_server_spans: false
+      flush_to_storage: true
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal
+    block:
+      v2_encoding: zstd
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors:
+        - service-graphs
+        - span-metrics
+        - local-blocks
+    # ★ 这里原本还写着 `metrics_generator_processors: [...]`（旧写法）。
+    #   它与上面那个 `metrics_generator.processors` 是**同一个事实写了两遍**：
+    #     · 语义上：重复配置
+    #     · 工程上：Tempo 对配置是**严格解析**的，早已废弃的键会让它
+    #       **启动即失败**（表现成 `docker compose up` 里的 ✘ Error，
+    #       而错误细节被进度输出盖住，很容易误判成端口/镜像问题）
+    #   只留现代写法（上面那个嵌套形式）。

@@ -1,0 +1,76 @@
+# ============================================================
+#  Loki 配置 · P0（单机 filesystem 模式，最省资源）
+#  为什么选 Loki 而不是 ELK：
+#    Elasticsearch 单节点起步就要 2~4GB 内存 + 数 GB 磁盘，
+#    Loki 只索引标签不索引正文，同量级日志内存占用约为其 1/5。
+#    代价：全文检索能力弱，但对"按服务+时间窗捞错误日志"这个场景足够。
+# ============================================================
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # ★ 保留期短：P0 只要够排查最近几小时的故障
+  retention_period: 72h
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  ingestion_rate_mb: 8
+  ingestion_burst_size_mb: 16
+  max_query_series: 5000
+  max_streams_per_user: 10000
+  allow_structured_metadata: true
+  volume_enabled: true
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+  compaction_interval: 10m
+
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /loki/rules
+  rule_path: /loki/rules-temp
+  ring:
+    kvstore:
+      store: inmemory
+  enable_api: true
+
+# 查询缓存：让反复查询同一时间窗（Agent 排查时很常见）变快
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 128
+
+analytics:
+  reporting_enabled: false

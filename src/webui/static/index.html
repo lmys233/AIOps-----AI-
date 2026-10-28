@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIOps · 运维对话台</title>
+<!-- ★ 零外部依赖：不引 CDN / 不外链字体（H9 可完全离线自持） -->
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="system-home">
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">AIOps<span>Copilot</span></div>
+    <div id="workspace-system" class="workspace-system"></div>
+    <nav>
+      <button class="nav-item platform-nav active" data-panel="observed" id="platform-observed">被观测系统</button>
+      <button class="nav-item platform-nav" data-panel="intents" id="platform-intents">意图列表</button>
+      <button class="nav-item platform-nav" data-panel="knowledge" id="platform-knowledge">知识库</button>
+      <button class="nav-item" data-panel="chat">对话排查</button>
+      <button class="nav-item" data-panel="alerts">告警列表 <span id="alerts-badge" class="alert-count" hidden></span></button>
+      <button class="nav-item" data-panel="incidents">事故记录</button>
+      <button class="nav-item" data-panel="caps">能力总览</button>
+      <button class="nav-item" data-panel="observed" id="workspace-back">← 返回系统列表</button>
+    </nav>
+    <!-- ★ 会话管理：侧栏列表（新建 / 切换 / 重命名 / 删除），当前会话高亮 -->
+    <div class="sessions">
+      <div class="sessions-head">
+        <span>会话</span>
+        <button class="ghost chip" id="session-new" title="新建一条会话（会话号由服务端分配）">＋ 新建会话</button>
+        <button class="ghost chip" id="session-refresh" title="刷新会话列表，不重新加载正文">↻</button>
+      </div>
+      <ul class="session-list" id="session-list"></ul>
+      <div class="sessions-note warn" id="session-list-note"></div>
+      <div class="sessions-note" id="session-note"></div>
+    </div>
+    <div class="sidebar-foot">
+      <label hidden>被观测系统 <select id="observed-select"><option value="">请选择系统</option></select></label>
+      <div id="observed-selection-note" class="muted" hidden></div>
+      <label>环境 <input id="env" value="prod"></label>
+      <label>集群 <input id="cluster" placeholder="可空"></label>
+      <label>时间窗 <input id="window" value="30m"></label>
+      <label class="row"><input id="noclari" type="checkbox"> 不要反问我（no_clarify）</label>
+      <label class="row"><input id="stream" type="checkbox" checked> 流式显示过程</label>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="statusbar" id="statusbar">
+      <strong id="workspace-title">被观测系统</strong>
+      <span class="badge unknown" id="badge-status">状态未知</span>
+      <span id="status-detail">正在读取 /health …</span>
+      <span class="spacer"></span>
+      <span class="mono" id="trace">trace: —</span>
+      <details class="platform-auth"><summary>连接凭据</summary><label>平台共享密钥 <input id="token" type="password" autocomplete="off" placeholder="AIOPS_AGENT_TOKEN（可空）"></label></details>
+    </header>
+
+    <section class="panel" id="panel-chat">
+      <div class="timeline" id="timeline"></div>
+      <div class="composer">
+        <div id="command-preview" class="command-preview" hidden aria-live="polite" aria-label="告警命令提示"></div>
+        <textarea id="message" rows="3" placeholder="例如：order 服务 P99 延迟涨到 2.3s，帮我定位根因（回车发送，Shift+Enter 换行）"></textarea>
+        <div class="composer-actions">
+          <button class="primary" id="send">发送</button>
+          <button id="clear">清空</button>
+          <span class="hint" id="chat-hint"></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-alerts">
+      <h2>告警列表</h2>
+      <p class="muted">当前系统及工作台环境/集群的告警。重复发送和恢复通知合并为一条告警；恢复状态来自发送方。默认只保存，引用后再排查。</p>
+      <div class="composer-actions"><button id="alerts-refresh">刷新列表</button><span id="warnings-note" role="status"></span></div>
+      <div id="warnings-list" aria-live="polite"></div>
+      <button id="warnings-more" hidden>再加载20条</button>
+      <details><summary>接入契约与测试发送器</summary>
+      <p class="muted">POST /v1/alerts；auto_diagnose=true 才自动排查。需要注册系统与服务；告警内容是待核实线索。</p>
+      <textarea id="alerts-payload" rows="12" class="mono"></textarea>
+      <div class="composer-actions">
+        <button class="primary" id="alerts-send">提交告警</button>
+        <button id="alerts-sample">填入示例</button>
+      </div>
+      <pre class="result mono" id="alerts-result"></pre>
+      <div id="alerts-records" aria-live="polite"></div>
+      </details>
+    </section>
+
+    <section class="panel" id="panel-incidents">
+      <h2>事故记录 <span class="mono muted">GET /v1/incidents</span></h2>
+      <div class="split">
+        <ul class="list" id="incident-list"></ul>
+        <pre class="result mono" id="incident-detail">选中左侧一条事故查看详情（与 /v1/chat 同源）。</pre>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-caps">
+      <h2>能力总览 <span class="mono muted">GET /webui/api/capabilities</span></h2>
+      <p class="muted">本系统实际登记的 SDK 能力与平台支持的只读诊断工具。接口申报不表示当前可达。</p>
+      <div id="caps"></div>
+    </section>
+    <section class="panel" id="panel-intents">
+      <h2>意图列表</h2>
+      <p class="muted">平台共享的路由插件配置。新增路由绑定已有处理能力；工具权限和顾问边界保持独立。</p>
+      <button id="intent-refresh">刷新目录与向量状态</button>
+      <button id="intent-add">＋ 新增意图路由</button>
+      <p id="intent-note" role="status"></p>
+      <form id="intent-editor" class="intent-editor" hidden>
+        <h3>编辑意图路由</h3>
+        <label>路由 ID <input id="intent-id" required maxlength="64" pattern="[A-Za-z][A-Za-z0-9_-]*"></label>
+        <label>意图名 <input id="intent-name" required maxlength="100"></label>
+        <label>意图描述 <textarea id="intent-description" rows="3" maxlength="1500"></textarea></label>
+        <label>处理能力 <select id="intent-handler"><option>INCIDENT_RCA</option><option>METRIC_QUERY</option><option>CHANGE_IMPACT</option><option>REMEDIATION</option><option>KNOWLEDGE_QA</option><option>OUT_OF_SCOPE</option></select></label>
+        <label>优先级（数字小的优先） <input id="intent-priority" type="number" min="0" max="10000" required></label>
+        <label>规则门槛 <input id="intent-gate" type="number" min="0.2" max="1" step="0.01" required></label>
+        <label><input id="intent-enabled" type="checkbox"> 启用</label>
+        <label>规则 JSON（pattern、weight、note） <textarea id="intent-patterns" class="mono" rows="7" required></textarea></label>
+        <label>作用域 JSON（null 或 service_fault 判据） <textarea id="intent-scope" class="mono" rows="4" required></textarea></label>
+        <label>示例问题（每行一条，最多 24 条） <textarea id="intent-examples" rows="6"></textarea></label>
+        <p id="intent-editor-note" role="status"></p>
+        <button id="intent-save" type="submit" class="primary">保存</button>
+        <button id="intent-cancel" type="button">取消</button>
+      </form>
+      <div id="intent-list"></div>
+    </section>
+    <section class="panel" id="panel-knowledge">
+      <h2>知识库</h2>
+      <p class="muted">原文与版本保存在平台数据库；生效且索引就绪的知识用于参考问答。知识不能证明现场故障原因。</p>
+      <button id="kb-refresh">刷新目录 / 索引状态</button><button id="kb-add">＋ 新增知识</button>
+      <form id="kb-filter" class="knowledge-filter">
+        <input id="kb-filter-query" placeholder="搜索标题或原文"><input id="kb-filter-category" placeholder="分类">
+        <select id="kb-filter-status"><option value="">所有未删除</option><option value="review">审核</option><option value="active">生效</option><option value="inactive">失效</option><option value="deleted">删除</option></select><button>筛选</button>
+      </form>
+      <p id="kb-note" role="status"></p>
+      <form id="kb-editor" class="intent-editor" hidden>
+        <label>标题 <input id="kb-title" required maxlength="160"></label>
+        <label>原文（支持Markdown标题与代码块，最多6万字符） <textarea id="kb-content" required rows="14" maxlength="60000"></textarea></label>
+        <label>上传者 <input id="kb-uploader" value="admin" maxlength="80"></label>
+        <label>分类 <input id="kb-category" value="运维知识" maxlength="80"></label>
+        <label>标签（逗号分隔） <input id="kb-tags"></label>
+        <label>系统范围（可空，空为平台共享） <input id="kb-scope" placeholder="obs_..." pattern="obs_[a-f0-9]{32}"></label>
+        <label>状态 <select id="kb-status"><option value="review">审核</option><option value="active">生效</option><option value="inactive">失效</option></select></label>
+        <p id="kb-editor-note" role="status"></p><button id="kb-save" class="primary">保存并建立索引</button><button id="kb-cancel" type="button">取消</button>
+      </form>
+      <div id="kb-list"></div><button id="kb-more" hidden>加载更多知识</button>
+    </section>
+    <section class="panel active" id="panel-observed">
+      <h2>被观测系统</h2>
+      <p class="muted">SDK 启动注册的系统、服务与接口目录。最近访问结果保留发生时间。</p>
+      <button id="observed-refresh">刷新目录</button>
+      <p id="observed-note" role="status"></p>
+      <div id="observed-list"></div>
+      <button id="observed-more" hidden>加载更多系统</button>
+      <details id="legacy-history"><summary>旧版历史（未分系统，仅查看）</summary>
+        <p class="muted">保留原有事故和方案。没有系统归属的旧记录不能自动用于新系统诊断。</p>
+        <div id="legacy-history-list"></div>
+      </details>
+    </section>
+  </main>
+  <aside id="knowledge-drawer" class="knowledge-drawer" hidden role="dialog" aria-label="知识原文">
+    <button id="knowledge-close">关闭原文</button><h3 class="knowledge-title"></h3><p class="knowledge-meta muted"></p><pre class="knowledge-content"></pre>
+  </aside>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+"""Readable evidence obligations; identifiers remain in structured details."""
+QUESTIONS={
+ 'client_disconnect_cancelled_request':'是否有同请求的断开协议事件、实际取消结果和未完成的请求取消记录',
+ 'configured_deadline_aborted_request':'是否有同请求真实期限到达且超时异常传递到请求终止的见证',
+ 'framework_shutdown_cancelled_request':'是否有已核实运行框架停机取消分支与同请求实际取消记录',
+ 'same_request_database_failure':'同一次请求中的数据库异常是否传递到接口',
+ 'same_request_database_dominant':'同一次请求中数据库阶段是否占主要耗时（重叠区间只计一次）',
+ 'same_request_downstream_dominant':'同一次请求中下游调用是否占主要耗时',
+ 'query_blocked_by_lock':'同一数据库会话的 SQL 执行期间是否存在锁等待',
+ 'comparable_plan_regression':'前后执行计划、参数分布和运行条件是否可比较且出现退化',
+ 'pool_full_during_timeout':'获取超时时是否有完整持有区间证明池容量被占满',
+ 'holder_sql_spans_timeout':'占满连接的 SQL 是否跨越该次获取超时时点',
+ 'complete_holder_lifecycle':'连接借出、归还和异常关闭的记录是否完整',
+ 'return_obligation_violated':'连接是否在应归还之后仍被持有',
+ 'conflicting_lock_order':'关联事务是否以相反顺序获取同一组锁',
+ 'transaction_wait_cycle':'数据库死锁报告是否明确记录关联事务的等待环',
+ 'long_transaction_holds_lock':'长事务是否在对应故障时段持有冲突锁',
+ 'duplicate_work_same_lock':'重复并发任务是否争用相同锁对象',
+ 'worker_database_wait':'被拒绝时工作线程是否正在等待数据库连接',
+ 'pool_pressure':'对应连接池是否在该时段被占满',
+ 'worker_downstream_wait':'被拒绝时工作线程是否正在等待下游调用',
+ 'correlated_downstream_wait':'同任务的下游调用是否持续跨越拒绝时点',
+ 'worker_capacity_mismatch':'已核实的工作池容量是否与实际入队需求不匹配',
+ 'runtime_target_verified':'应用在故障时实际连接的数据库和解析路径是否已核实',
+ 'runtime_target_mismatch':'应用实际连接目标或解析路径是否与预期不一致',
+ 'object_absent':'目标对象是否确实不在应用实际连接的库和解析路径中',
+ 'migration_not_applied':'故障前的相关迁移是否未执行或失败',
+ 'ddl_removed_before_fault':'对象是否在故障前被删除或改名',
+ 'platform_oom_matches_exit':'独立退出记录是否与平台明确的 OOM 终止事件匹配',
+ 'external_signal_matches_exit':'独立退出记录是否与受信的外部终止信号事件匹配',
+}
+from ..observed.access_candidates import QUESTIONS as SDK_QUESTIONS
+QUESTIONS.update(SDK_QUESTIONS)

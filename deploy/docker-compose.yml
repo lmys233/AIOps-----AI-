@@ -1,0 +1,315 @@
+# ============================================================
+#  AIOps 项目 · 基础设施编排（**只含有状态服务**）
+#
+#  ★ 架构（task.md 阶段 1R / 决策记录）：
+#
+#      被观测系统与 AIOps 系统都**在 Windows 上原生运行**，
+#      本文件只负责"装在 Windows 上很痛苦"的有状态服务。
+#
+#      ┌─ Windows 原生进程 ──────────────┐   ┌─ Docker（本文件）──────┐
+#      │ gateway/order/payment/inventory │   │ Postgres(pgvector)     │
+#      │ （经 SDK 启动，见 native_run）   │◄─►│ Prometheus/Loki/Tempo  │
+#      │ AIOps 系统（阶段 2 起）           │端口│ OTel Collector/Grafana │
+#      └────────────────────────────────┘   └───────────────────────┘
+#
+#    为什么这么分：
+#      · 业务代码不依赖容器编排，容器化只带来构建链的外网依赖；
+#      · 而 Postgres+pgvector / Prometheus / Loki / Tempo 原生装在 Windows 上
+#        成本极高，放进容器一条命令就能起齐。
+#
+#  ★ 本文件**不再包含** 4 个微服务：
+#    它们在宿主上跑（`.\run.ps1 business-up`，**经 SDK 启动**），因此这里
+#    既没有任何服务的 `build:` 段，也没有本地应用镜像名。
+#
+#  ★ 网络要点：容器要访问宿主上的原生服务，必须走
+#    `host.docker.internal`。这里**显式**声明 extra_hosts，
+#    不依赖 Docker Desktop 的隐式注入 —— Linux 上没有那个魔法，
+#    显式声明才可移植（也更清楚"这里确实跨了宿主机边界"）。
+#
+#  资源预算（配合 Docker Desktop 分配 16GB）：
+#    观测栈 ~3.5GB ｜ 存储 ~2GB ｜ 合计峰值 ~5.5GB
+#
+#  ★ 部署身份（集群名/环境）的**唯一定义处是 `deploy/.env`**，不是本文件：
+#    这里只负责把它传给容器（`environment:`），各组件再在自己的配置里引用
+#    （prometheus 的 expand-external-labels / promtail・tempo 的 config.expand-env /
+#     collector 的 ${env:...}）。**配置里不再出现字面值** ——
+#    原先 4 份配置各写一份、SDK 又硬编码了另一个值，换个部署名会静默打错标签。
+#
+#  用法：
+#    .\run.ps1 infra-up        # 起基础设施（等价 docker compose up -d）
+#    .\run.ps1 infra-ps        # 看健康状态
+#    docker compose config     # 语法校验（不启动；也能看到变量替换结果）
+#
+#  ★ 关于 Kafka（task.md T6 细节 2）：
+#    spec §8.1「数据源总览」里**没有 Kafka**（只有 Prometheus/Loki/Tempo/
+#    Postgres/Redis/K8s API），P1 也没有消费者。留着它不仅白占 ~1GB 内存，
+#    还会让"数据源总览"与实现不一致 —— 一致性本身就是可维护性。
+#
+#  ★ 关于 depends_on 的 condition（task.md T6 细节 3）：
+#    全部用 service_healthy。用 service_started 会让"容器已创建"被当成
+#    "依赖可用"，于是依赖方在 Postgres 还没接受连接时就启动，
+#    表现为"启动期偶发报错" —— 这正是 spec §8.4 要避免的假故障。
+# ============================================================
+
+name: aiops
+
+services:
+
+  # ==========================================================
+  #  存储层
+  # ==========================================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aiops-postgres
+    environment:
+      POSTGRES_USER: aiops
+      POSTGRES_PASSWORD: aiops_dev_pw
+      POSTGRES_DB: aiops
+      # 情景记忆的向量维度，与 bge-m3 对齐（1024 维）
+      PGVECTOR_DIM: "1024"
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # ★ init 脚本目录。01-schema.sql / 02-runner-role.sql 在这里执行，
+      #   建出 spec §8.6 的存储契约（3 张契约表 + 1 张验证方式取值表）
+      #   与 aiops_runner 角色权限，并**自检**。
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiops -d aiops"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { memory: 1g }
+    networks: [aiops-net]
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: aiops-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    ports: ["6379:6379"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits: { memory: 640m }
+    networks: [aiops-net]
+
+  # ==========================================================
+  #  可观测栈
+  # ==========================================================
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: aiops-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=48h         # 支持 24h 查询；容量上限仍可能提前淘汰
+      - --storage.tsdb.retention.size=8GB
+      - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver
+      # ★ 让 external_labels 里的 ${OBSERVED_CLUSTER} 展开（默认不展开）
+      - --enable-feature=expand-external-labels
+    # ★ 部署身份来自 `deploy/.env`（唯一定义处），由 compose 注入容器
+    environment:
+      OBSERVED_CLUSTER: ${OBSERVED_CLUSTER:-}
+      OBSERVED_ENV: ${OBSERVED_ENV:-}
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - promdata:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    # ★ Prometheus 要抓取**宿主上**的原生服务（8080~8083），
+    #   因此必须能解析 host.docker.internal。
+    #   显式声明而不是依赖 Docker Desktop 的隐式注入：
+    #   Linux 上没有那个魔法，显式写才可移植；也让"跨宿主机边界"这件事在配置里可见。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits: { memory: 1g }
+    networks: [aiops-net]
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    container_name: aiops-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      # 自动装载数据源与仪表盘（免手工点）
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    ports: ["3000:3000"]
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      prometheus: { condition: service_healthy }
+      loki: { condition: service_healthy }
+      tempo: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { memory: 512m }
+    networks: [aiops-net]
+
+  loki:
+    image: grafana/loki:3.2.1
+    container_name: aiops-loki
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    ports: ["3100:3100"]
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - lokidata:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { memory: 768m }
+    networks: [aiops-net]
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    container_name: aiops-tempo
+    # ★ `-config.expand-env=true` 让配置里的 ${OBSERVED_CLUSTER} 展开
+    command: ["-config.file=/etc/tempo/tempo-config.yml", "-config.expand-env=true"]
+    environment:
+      OBSERVED_CLUSTER: ${OBSERVED_CLUSTER:-}
+    ports: ["3200:3200", "4318:4318"]
+    volumes:
+      - ./tempo/tempo-config.yml:/etc/tempo/tempo-config.yml:ro
+      - tempodata:/var/tempo
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3200/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { memory: 768m }
+    networks: [aiops-net]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: aiops-otel-collector
+    command: ["--config=/etc/otelcol/config.yml"]
+    # ★ 部署身份注入：配置里用 Collector 原生的 `${env:OBSERVED_CLUSTER}` 展开
+    environment:
+      OBSERVED_CLUSTER: ${OBSERVED_CLUSTER:-}
+      OBSERVED_ENV: ${OBSERVED_ENV:-}
+    volumes:
+      - ./otel/otel-collector-config.yml:/etc/otelcol/config.yml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "8888:8888"   # Collector 自身指标（Prometheus 抓这个）
+      - "8889:8889"   # Prometheus exporter（应用经 OTLP 上报的指标）
+    # ★ 这里**故意没有** healthcheck（fix_bugs.md BUG-031）：
+    #
+    #   `otel/opentelemetry-collector-contrib` 是 **distroless** 镜像 ——
+    #   里面只有 `/otelcol-contrib` 一个可执行文件，**没有 /bin/sh，也没有 wget**。
+    #   于是任何 `CMD-SHELL ...` 形式的 healthcheck 都只会得到：
+    #       OCI runtime exec failed: exec: "/bin/sh": stat /bin/sh: no such file or directory
+    #   容器会被永久标成 `unhealthy`（实测连续失败 39 次），
+    #   而它其实工作得好好的（span 收发正常）。
+    #   那种"红着但没事"的状态比没有健康检查更糟：它会训练人忽略红灯。
+    #
+    #   采集链路的健康改为**行为判据**，由 tests/verify_phase1.py --task t13 验：
+    #     · Prometheus 里 otelcol_receiver_accepted_spans > 0
+    #     · otelcol_exporter_send_failed_spans == 0
+    #     · Tempo 里查得到 trace
+    #   （都从**宿主**经已发布的 8888/3200 端口查，不需要进容器。）
+    deploy:
+      resources:
+        limits: { memory: 512m }
+    networks: [aiops-net]
+
+  promtail:
+    image: grafana/promtail:3.2.1
+    container_name: aiops-promtail
+    # ★ `-config.expand-env=true` 让标签里的 ${OBSERVED_CLUSTER}/${OBSERVED_ENV} 展开
+    command: ["-config.file=/etc/promtail/promtail-config.yml", "-config.expand-env=true"]
+    environment:
+      OBSERVED_CLUSTER: ${OBSERVED_CLUSTER:-}
+      OBSERVED_ENV: ${OBSERVED_ENV:-}
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      # ★ 原生日志目录（只读）。
+      #   被观测系统在 Windows 上原生跑，promtail 的服务发现看不到它们，
+      #   因此 SDK 把同一份单行 JSON **双写**成本地 JSONL 文件，
+      #   promtail 就采这个目录（配置里 `__path__: /var/log/observed/*.jsonl`）。
+      #   宿主目录：<仓库根>/.run/logs（`.\run.ps1 business-up` 会确保它存在）
+      - ../.run/logs:/var/log/observed:ro
+    depends_on:
+      loki: { condition: service_healthy }
+    healthcheck:
+      # ★ task.md T6 细节 3 要求"各服务加 healthcheck"——
+      #   promtail 是唯一一个不做探针就完全看不出死活的组件：
+      #   它挂了不会影响任何业务请求，只会让日志静默断流，
+      #   而"日志静默断流"恰恰会被 Log Agent 误读成"这段时间没有错误日志"（spec §8.3 P20）。
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9080/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { memory: 256m }
+    networks: [aiops-net]
+
+  # ==========================================================
+  #  被观测系统不在这里（task.md 阶段 1R / 决策记录）
+  #
+  #  4 个 FastAPI 微服务（gateway / order / payment / inventory）
+  #  作为 **Windows 原生进程** 运行，由 `.\run.ps1 business-up` 启动
+  #  （**经 SDK**：`python -m sdk run --config src/observed/app.yaml --service <名>`，
+  #   实现见 src/observed/native_run.py）。
+  #
+  #  为什么从这里移出去：
+  #    · 业务代码不依赖容器编排，容器化只带来构建链的外网依赖
+  #      （实测：基础镜像 python:3.12-slim 在镜像源不通时直接卡死第一步）；
+  #    · 服务间仍**只通过 HTTP 交互**（spec §8.8），跑在哪里不影响这条契约；
+  #    · Prometheus 通过 host.docker.internal 抓它们的 /metrics，
+  #      promtail 通过挂载的日志目录采集它们（见上面的 services）。
+  #
+  #  ★ 网络边界变了，映射关系也跟着变：
+  #      容器内互访       → 服务名      （如 http://order:8080）
+  #      宿主访问容器      → localhost   （如 localhost:5432 / localhost:4317）
+  #      容器访问宿主服务  → host.docker.internal:8081
+  # ==========================================================
+
+networks:
+  aiops-net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:
+  promdata:
+  grafanadata:
+  lokidata:
+  tempodata:

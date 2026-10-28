@@ -1,0 +1,191 @@
+# ============================================================
+#  被观测系统（4 微服务）· 项目级配置 —— **唯一一份**
+#
+#  ★ 这份文件同时装着两类内容，它们泾渭分明：
+#
+#    · **业务段**（db / logging / services）—— 业务自己的运行参数。
+#      业务代码不认识这份文件：SDK 作为**启动器**，把
+#      `aiops.services.<服务>.env_bridge` 里声明的业务参数**落到环境变量**，
+#      业务照旧 `os.environ[...]` 读取（业务零改动）。
+#      → 换成 Spring 那类自己读 application.yaml 的后端时，`env_bridge` 直接不写。
+#
+#    · **aiops 段** —— SDK 的接入清单（"怎么把这个项目接进来"）。
+#      它不是业务配置，所以不该另起一份文件、也不该被业务读。
+#
+#  ★ 凭据不进本文件（它要进仓库）：数据库口令仍从环境变量
+#    `RUNNER_DATABASE_URL` 读。
+#
+#  ★ `${路径}` 是**引用**（单一来源）：改 `services.inventory.port` 一处，
+#    所有引用它的地方一起变；而 diff 用的是**解析后的值**，
+#    所以引用链上的改动照样会被识别为一次变更。
+# ============================================================
+
+# ------------------------------------------------------------
+#  业务段 · 数据库连接池
+#
+#  ★ 这两个键就是本项目 P0 场景（连接池饱和）的**成因参数**：
+#    改小 `size` + 重启 = 一次真实的配置变更 + 一次真实的容量故障。
+#    （T6 已去掉故障注入旋钮；这里用的是**正常运维参数**，不是后门。）
+# ------------------------------------------------------------
+db:
+  pool:
+    size: 20                # 池上限（演练时曾被临时改成 3 制造池饱和，已复原）
+    timeout_sec: 3          # 获取连接超时（秒）
+
+# ============================================================
+#  部署段 · 部署身份（spec §8.4 约定 4）
+#
+#  ★ 这三个值是**部署事实**，不是业务参数：同一个被观测系统里的所有服务都一样，
+#    所以只写一处（这里），由 SDK 读出来在 `/health` 里**自报**
+#    （`/services` 汇总 → Agent 侧实体对齐与拓扑）。
+#
+#  ★ 取值的**唯一定义处**是 `deploy/.env` 的 `OBSERVED_CLUSTER`/`OBSERVED_ENV`：
+#    - 观测栈（prometheus/promtail/tempo/otel-collector）的配置引用同名的环境变量；
+#    - `run.ps1` 启动业务前把 `deploy/.env` 读进环境（`AIOPS_CLUSTER` 等），
+#      SDK 按"项目级配置 → 环境变量"的顺序取值（见 sdk/config.py 的 ENV_OVERRIDES）。
+#  ★ 这里留空是**故意**的：空 = "没配置"，SDK 就报 null —— 不许自造默认值。
+#    造出来的值会让「集群未知」与「真的是这个集群」再也分不开（spec §7.1）。
+# ============================================================
+deployment:
+  cluster: ""            # 由 AIOPS_CLUSTER 覆盖（唯一取值处：deploy/.env）
+  env: ""                # 由 AIOPS_ENV 覆盖
+  namespace: ""          # 由 AIOPS_NAMESPACE 覆盖（单命名空间部署可留空）
+
+# ------------------------------------------------------------
+#  业务段 · 日志
+# ------------------------------------------------------------
+logging:
+  level: INFO
+
+# ------------------------------------------------------------
+#  业务段 · 服务与下游地址
+# ------------------------------------------------------------
+services:
+  gateway:
+    port: 8080
+    downstream:
+      order: "http://127.0.0.1:${services.order.port}"
+
+  order:
+    port: 8081
+    downstream:
+      inventory: "http://127.0.0.1:${services.inventory.port}"
+      payment: "http://127.0.0.1:${services.payment.port}"
+
+  payment:
+    port: 8082
+
+  inventory:
+    port: 8083
+
+# ============================================================
+#  接入段 · SDK 的接入清单（每个服务一段）
+#
+#  运行方式（在项目根目录）：
+#      python -m sdk run --config src/observed/app.yaml --service order
+# ============================================================
+aiops:
+  services:
+
+    # ----------------------------------------------------------
+    # gateway（纯转发层，没有数据库池）
+    # ----------------------------------------------------------
+    gateway:
+      app: observed.gateway.main:app
+      port: "${services.gateway.port}"
+      log_dir: .run/logs
+      # target 名 → 业务段里的 URL 键（URL **只声明一处**，就是上面那份）
+      downstream:
+        order: services.gateway.downstream.order
+      ready:
+        order: "${services.gateway.downstream.order}/health"
+      operations:
+        "POST /api/orders": gateway_create_order
+        "GET /api/orders/{order_id}": gateway_get_order
+      tracing:
+        otlp_endpoint: "http://127.0.0.1:4317"
+      env_bridge:
+        services.gateway.port: SERVICE_PORT
+        services.gateway.downstream.order: ORDER_URL
+        logging.level: LOG_LEVEL
+
+    # ----------------------------------------------------------
+    # order（有连接池 + 两个下游）
+    # ----------------------------------------------------------
+    order:
+      app: observed.order.main:app
+      port: "${services.order.port}"
+      log_dir: .run/logs
+      pool:
+        driver: asyncpg
+      downstream:
+        inventory: services.order.downstream.inventory
+        payment: services.order.downstream.payment
+      ready:
+        postgres: pool
+        inventory: "${services.order.downstream.inventory}/health"
+        payment: "${services.order.downstream.payment}/health"
+      operations:
+        "POST /orders": create_order
+        "GET /orders/{order_id}": get_order
+        "GET /pool-stats": pool_stats
+      active-probe:
+        routes:
+          "GET /pool-stats": {effect: read_only, probe: true, load: false, max_requests: 2}
+          "GET /orders/{order_id}": {effect: read_only, probe: true, load: false, max_requests: 2}
+      tracing:
+        otlp_endpoint: "http://127.0.0.1:4317"
+      env_bridge:
+        db.pool.size: DB_POOL_SIZE
+        db.pool.timeout_sec: DB_POOL_TIMEOUT_SEC
+        services.order.downstream.inventory: INVENTORY_URL
+        services.order.downstream.payment: PAYMENT_URL
+        logging.level: LOG_LEVEL
+
+    # ----------------------------------------------------------
+    # payment（叶子服务：有池、无下游）
+    # ----------------------------------------------------------
+    payment:
+      app: observed.payment.main:app
+      port: "${services.payment.port}"
+      log_dir: .run/logs
+      pool:
+        driver: asyncpg
+      ready:
+        postgres: pool
+      operations:
+        "POST /pay": pay
+        "GET /refund-policy": refund_policy
+      active-probe:
+        routes:
+          "GET /refund-policy": {effect: read_only, probe: true, load: true, max_requests: 20, max_concurrency: 4, max_duration_sec: 10, max_rps: 5}
+      tracing:
+        otlp_endpoint: "http://127.0.0.1:4317"
+      env_bridge:
+        db.pool.size: DB_POOL_SIZE
+        db.pool.timeout_sec: DB_POOL_TIMEOUT_SEC
+        logging.level: LOG_LEVEL
+
+    # ----------------------------------------------------------
+    # inventory（叶子服务）
+    # ----------------------------------------------------------
+    inventory:
+      app: observed.inventory.main:app
+      port: "${services.inventory.port}"
+      log_dir: .run/logs
+      pool:
+        driver: asyncpg
+      ready:
+        postgres: pool
+      operations:
+        "GET /check": check_stock
+        "POST /reserve": reserve_stock
+      active-probe:
+        routes:
+          "GET /check": {effect: read_only, probe: true, load: false, max_requests: 2}
+      tracing:
+        otlp_endpoint: "http://127.0.0.1:4317"
+      env_bridge:
+        db.pool.size: DB_POOL_SIZE
+        db.pool.timeout_sec: DB_POOL_TIMEOUT_SEC
+        logging.level: LOG_LEVEL
